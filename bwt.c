@@ -104,6 +104,7 @@ static inline int __occ_aux(uint64_t y, int c)
 	return ((y + (y >> 4)) & 0xf0f0f0f0f0f0f0full) * 0x101010101010101ull >> 56;
 }
 
+/*
 bwtint_t bwt_occ(const bwt_t *bwt, bwtint_t k, ubyte_t c)
 {
 	bwtint_t n;
@@ -123,6 +124,71 @@ bwtint_t bwt_occ(const bwt_t *bwt, bwtint_t k, ubyte_t c)
 
 	// calculate Occ
 	n += __occ_aux(((uint64_t)p[0]<<32 | p[1]) & ~((1ull<<((~k&31)<<1)) - 1), c);
+	if (c == 0) n -= ~k&31; // corrected for the masked bits
+
+	return n;
+}*/
+
+
+#define __occ_aux4(bwt, b)											\
+	((bwt)->cnt_table[(b)&0xff] + (bwt)->cnt_table[(b)>>8&0xff]		\
+	 + (bwt)->cnt_table[(b)>>16&0xff] + (bwt)->cnt_table[(b)>>24])
+
+
+
+bwtint_t bwt_occ(const bwt_t *bwt, bwtint_t k, ubyte_t c)
+{
+	bwtint_t n;
+	uint32_t *p, *end;
+
+	if (k == bwt->seq_len) return bwt->L2[c+1] - bwt->L2[c];
+	if (k == (bwtint_t)(-1)) return 0;
+	k -= (k >= bwt->primary); // because $ is not in bwt
+
+	// retrieve Occ at k/OCC_INTERVAL
+	n = ((bwtint_t*)(p = bwt_occ_intv(bwt, k)))[c];
+
+
+	p += sizeof(bwtint_t); // jump to the start of the first BWT cell
+
+	// calculate Occ up to the last k/32
+	end = p + (((k>>5) - ((k&~OCC_INTV_MASK)>>5))<<1);
+	
+	bwtint_t data, x;
+	
+	for (data = 0; p < end; p += 2){
+		 //n += __occ_aux((uint64_t)p[0]<<32 | p[1], c);
+		
+		x = __occ_aux4(bwt, p[0]);
+        data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+	
+		x = __occ_aux4(bwt, p[1]);
+        data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+
+       
+        
+	}
+
+	// calculate Occ
+	//n += __occ_aux(((uint64_t)p[0]<<32 | p[1]) & ~((1ull<<((~k&31)<<1)) - 1), c);
+	
+	bwtint_t tmp = ((uint64_t)p[0]<<32 | p[1]) & ~((1ull<<((~k&31)<<1)) - 1);
+	x = __occ_aux4(bwt, tmp>>32 & 0xffffffff);
+    data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+	
+	x = __occ_aux4(bwt, tmp & 0xffffffff);
+    data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+        
+	if(c==0){
+		n += data&0xffff;
+	}else if(c==1){
+		n += data>>16&0xffff;
+	}else if(c==2){
+		n += data>>32&0xffff;
+	}else{
+		n += data>>48;
+	}
+
 	if (c == 0) n -= ~k&31; // corrected for the masked bits
 
 	return n;
@@ -162,12 +228,10 @@ void bwt_2occ(const bwt_t *bwt, bwtint_t k, bwtint_t l, ubyte_t c, bwtint_t *ok,
 	}
 }
 
-#define __occ_aux4(bwt, b)											\
-	((bwt)->cnt_table[(b)&0xff] + (bwt)->cnt_table[(b)>>8&0xff]		\
-	 + (bwt)->cnt_table[(b)>>16&0xff] + (bwt)->cnt_table[(b)>>24])
 
 void bwt_occ4(const bwt_t *bwt, bwtint_t k, bwtint_t cnt[4])
 {
+	
 	bwtint_t x;
 	uint32_t *p, tmp, *end;
 	if (k == (bwtint_t)(-1)) {
@@ -176,14 +240,31 @@ void bwt_occ4(const bwt_t *bwt, bwtint_t k, bwtint_t cnt[4])
 	}
 	k -= (k >= bwt->primary); // because $ is not in bwt
 	p = bwt_occ_intv(bwt, k);
+
+
 	memcpy(cnt, p, 4 * sizeof(bwtint_t));
 	p += sizeof(bwtint_t); // sizeof(bwtint_t) = 4*(sizeof(bwtint_t)/sizeof(uint32_t))
 	end = p + ((k>>4) - ((k&~OCC_INTV_MASK)>>4)); // this is the end point of the following loop
-	for (x = 0; p < end; ++p) x += __occ_aux4(bwt, *p);
+	
+	bwtint_t data;
+
+	for (x = 0, data = 0; p < end; ++p){
+		//x += __occ_aux4(bwt, *p);
+		x = __occ_aux4(bwt, *p);
+		data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+	}
 	tmp = *p & ~((1U<<((~k&15)<<1)) - 1);
-	x += __occ_aux4(bwt, tmp) - (~k&15);
-	cnt[0] += x&0xff; cnt[1] += x>>8&0xff; cnt[2] += x>>16&0xff; cnt[3] += x>>24;
+
+	//x += __occ_aux4(bwt, tmp) - (~k&15);
+	
+	x = __occ_aux4(bwt, tmp) - (~k&15);
+	data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+	
+	//cnt[0] += x&0xff; cnt[1] += x>>8&0xff; cnt[2] += x>>16&0xff; cnt[3] += x>>24;
+	
+	cnt[0] += data&0xffff; cnt[1] += data>>16&0xffff; cnt[2] += data>>32&0xffff; cnt[3] += data>>48;
 }
+
 
 // an analogy to bwt_occ4() but more efficient, requiring k <= l
 void bwt_2occ4(const bwt_t *bwt, bwtint_t k, bwtint_t l, bwtint_t cntk[4], bwtint_t cntl[4])
@@ -191,33 +272,65 @@ void bwt_2occ4(const bwt_t *bwt, bwtint_t k, bwtint_t l, bwtint_t cntk[4], bwtin
 	bwtint_t _k, _l;
 	_k = k - (k >= bwt->primary);
 	_l = l - (l >= bwt->primary);
+
+	
 	if (_l>>OCC_INTV_SHIFT != _k>>OCC_INTV_SHIFT || k == (bwtint_t)(-1) || l == (bwtint_t)(-1)) {
 		bwt_occ4(bwt, k, cntk);
 		bwt_occ4(bwt, l, cntl);
+	
+		
+		
 	} else {
+		
 		bwtint_t x, y;
+		bwtint_t data, datay;
+
 		uint32_t *p, tmp, *endk, *endl;
 		k -= (k >= bwt->primary); // because $ is not in bwt
 		l -= (l >= bwt->primary);
 		p = bwt_occ_intv(bwt, k);
+		
 		memcpy(cntk, p, 4 * sizeof(bwtint_t));
 		p += sizeof(bwtint_t); // sizeof(bwtint_t) = 4*(sizeof(bwtint_t)/sizeof(uint32_t))
 		// prepare cntk[]
 		endk = p + ((k>>4) - ((k&~OCC_INTV_MASK)>>4));
 		endl = p + ((l>>4) - ((l&~OCC_INTV_MASK)>>4));
-		for (x = 0; p < endk; ++p) x += __occ_aux4(bwt, *p);
-		y = x;
+
+		for (x = 0, data = 0; p < endk; ++p){
+			 //x += __occ_aux4(bwt, *p);
+			
+			x = __occ_aux4(bwt, *p);
+			
+			data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);	
+		}
+		//y = x;
 		tmp = *p & ~((1U<<((~k&15)<<1)) - 1);
-		x += __occ_aux4(bwt, tmp) - (~k&15);
+		//x += __occ_aux4(bwt, tmp) - (~k&15);
+		
+		datay = data;
+
+		x = __occ_aux4(bwt, tmp) - (~k&15);
+		data += (x>>24)<<48 | (x>>16 & 0xff)<<32 | (x>>8 & 0xff)<<16 | (x & 0xff);
+
 		// calculate cntl[] and finalize cntk[]
-		for (; p < endl; ++p) y += __occ_aux4(bwt, *p);
+		for (; p < endl; ++p){
+			// y += __occ_aux4(bwt, *p);
+			 y = __occ_aux4(bwt, *p);
+			 datay += (y>>24)<<48 | (y>>16 & 0xff)<<32 | (y>>8 & 0xff)<<16 | (y & 0xff);
+		}
+		
 		tmp = *p & ~((1U<<((~l&15)<<1)) - 1);
-		y += __occ_aux4(bwt, tmp) - (~l&15);
+		//y += __occ_aux4(bwt, tmp) - (~l&15);
+		
+		y = __occ_aux4(bwt, tmp) - (~l&15);
+		datay += (y>>24)<<48 | (y>>16 & 0xff)<<32 | (y>>8 & 0xff)<<16 | (y & 0xff);
+		
 		memcpy(cntl, cntk, 4 * sizeof(bwtint_t));
-		cntk[0] += x&0xff; cntk[1] += x>>8&0xff; cntk[2] += x>>16&0xff; cntk[3] += x>>24;
-		cntl[0] += y&0xff; cntl[1] += y>>8&0xff; cntl[2] += y>>16&0xff; cntl[3] += y>>24;
+		cntk[0] += data&0xffff; cntk[1] += data>>16&0xffff; cntk[2] += data>>32&0xffff; cntk[3] += data>>48;
+		cntl[0] += datay&0xffff; cntl[1] += datay>>16&0xffff; cntl[2] += datay>>32&0xffff; cntl[3] += datay>>48;
 	}
 }
+
 
 int bwt_match_exact(const bwt_t *bwt, int len, const ubyte_t *str, bwtint_t *sa_begin, bwtint_t *sa_end)
 {

@@ -32,7 +32,7 @@
 #include <stddef.h>
 
 // requirement: (OCC_INTERVAL%16 == 0); please DO NOT change this line because some part of the code assume OCC_INTERVAL=0x80
-#define OCC_INTV_SHIFT 7
+#define OCC_INTV_SHIFT 10 //7->10
 #define OCC_INTERVAL   (1LL<<OCC_INTV_SHIFT)
 #define OCC_INTV_MASK  (OCC_INTERVAL - 1)
 
@@ -69,8 +69,13 @@ typedef struct { size_t n, m; bwtintv_t *a; } bwtintv_v;
 */
 
 // The following two lines are ONLY correct when OCC_INTERVAL==0x80
-#define bwt_bwt(b, k) ((b)->bwt[((k)>>7<<4) + sizeof(bwtint_t) + (((k)&0x7f)>>4)])
-#define bwt_occ_intv(b, k) ((b)->bwt + ((k)>>7<<4))
+//#define bwt_bwt(b, k) ((b)->bwt[((k)>>7<<4) + sizeof(bwtint_t) + (((k)&0x7f)>>4)])
+//#define bwt_occ_intv(b, k) ((b)->bwt + ((k)>>7<<4))
+
+//YuShan
+#define bwt_bwt(b, k) ((b)->bwt[(((k)/OCC_INTERVAL) * (OCC_INTERVAL/(sizeof(uint32_t)*8/2) + sizeof(bwtint_t)/4*4)) + sizeof(bwtint_t)/4*4 + ((k)%OCC_INTERVAL/16)])
+#define bwt_occ_intv(b, k) ((b)->bwt + (((k)/OCC_INTERVAL) * (OCC_INTERVAL/(sizeof(uint32_t)*8/2) + sizeof(bwtint_t)/4*4)))
+
 
 /* retrieve a character from the $-removed BWT string. Note that
  * bwt_t::bwt is not exactly the BWT string and therefore this macro is
